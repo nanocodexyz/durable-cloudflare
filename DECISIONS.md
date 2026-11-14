@@ -524,3 +524,25 @@ Measured on the hosted Hand with `node scripts/hillclimb.mjs --scenario <s> --ag
 | nanocode-ts ddca280 rebuilt against nanocode d23a902c6 (`npm run build`, clang-22) | 4,000 | 0 | score, spawn, turn, done, twice passed: 0 lost, 0 repeated, 0 hedges |
 
 The fixed SDK reaches the deployed Worker only after a nanocode-ts release that pins nanocode d23a902c6 or later.
+
+## 2026-11-14: the haiku warm gap is not the credential path, and the first delta relay is network
+
+Credential path. Native nanocode (SDK 8467d6a, `~/nc-release/native-src`) ran on gak-9 with the Claude login and with the Worker's credential path: a scratch Worker (`gk2-pool-probe` on workers.dev, served from CMH) that forwards `/v1/messages` to `env.AI.run('anthropic/claude-haiku-5.5', ..., { gateway: { id: 'default' }, returnRawResponse: true })`, the same unified billing call as `Gateway.create`. The demo holds no Anthropic API key (`MODEL_AUTH` is `api_key` for the AI binding), so this is the key the Worker uses. Lanes were interleaved per index with `bench/sla/run-mac.ts --live --lanes=live-nc-claude@native,live-nc-claude@pool --claude-model=claude-haiku-5-5 --turns=3`, 0 errors.
+
+| run | turn | login e2e p50/p90 | pool e2e p50/p90 | login provider first output p50 | AI binding first body at the probe p50/p90 |
+| --- | --- | --- | --- | --- | --- |
+| 15 sessions | 2 | 540/803 | 854/1205 | - | - |
+| 15 sessions | 3 | 583/842 | 900/1436 | - | - |
+| 10 sessions, `wrangler tail` | 2 | 694/1093 | 974/991 | 693 | 668/808 |
+| 10 sessions, `wrangler tail` | 3 | 635/1216 | 787/1297 | 633 | 698/1204 |
+
+The pool lane is slower end to end (+283 to +359 ms paired p50 in the first run), but the time is in the client to probe path: gak-9 reaches CMH in about 73 ms per round trip and uploads a 43 KB request through it. The provider time on the two credentials is the same within noise: the AI binding returned its first body to the probe in 668 and 698 ms p50 against 693 and 633 ms for the Claude login from gak-9 (otel `messages.attempt` `time_to_first_output_ns`, matched by process ID), and the session object read 529 to 611 ms in the earlier window against native 565 to 604. The haiku gap is the Worker's own hops, not the provider pool.
+
+First delta relay. A raw stream probe (scratch scripts `~/nc-release/gk2/rawp2.mjs` to `rawp4.mjs`, 20 warm turns per prompt shape, short reply and an 80-number count, interleaved) read every frame of `/sessions/<id>/turns?live=1` with the client wall clock (gak-9 offset +9 ms against time.cloudflare.com by `sntp`):
+
+- The first `assistant.delta` leaves the object at once: `streamed_at` minus `created_at` is 0 to 1 ms, and the delta is a live frame that the SDK publishes before any persisted event of its batch (`LogSink::route`).
+- Delta `created_at` to client receipt is 59/80 ms p50/p90 (short) and 71/139 ms (count), and the `queued` frame of the same turns takes 65/74 and 74/104 ms. The first delta has no cost beyond the frame that carries the response headers.
+- A long stream, whose first delta has no persisted event behind it, is not faster (client receipt minus provider first byte 170 against 145 ms p50), so the output gate of the final commit does not hold the first delta. `EVENT_COALESCE_MS` holds only later deltas: the first delta resets nothing, and the second waits for the window.
+- The Worker to session object round trip on a read is 76 to 91 ms (`worker;dur` of `GET /sessions/<id>/events`, 11 samples), against 22 to 48 ms client to Worker. The object sits near the pool object, not near SJC (see "per-colo session pools measured and removed").
+
+The 75 to 89 ms relay is the one-way path from the session object to the client. No change to the SSE parse, the live publish or the response stream shortens it, so none was made. Only object placement shortens it, and the per-colo pool entry measured that trade as a loss on admission commit.
