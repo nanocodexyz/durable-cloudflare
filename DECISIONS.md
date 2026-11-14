@@ -490,3 +490,22 @@ The dispatch wait is the storage commit. In 10 three-turn sessions, `started_ms`
 
 Haiku-5-5 misses the +50 ms target by about +150 to +250 ms p50. Sonnet-5-5 meets it with a margin of about 500 ms. The difference between the two models is in the provider time, not in the Worker hops, and the provider time depends on the credential path (API key on the Worker, Claude login on native).
 
+
+## 2026-11-14: the session pool hedge did not hold the cold gate and is reverted
+
+Version 7fbbed6c (durable-cloudflare 23fa1f7, nanocode-ts build-ddca280, `SESSION_POOL_HEDGE_MS` 183) was deployed from gak-9 with the deploy lock. 16 of 16 three-turn sessions completed on both hosts and both providers (`probe.ts --sessions=4`, 48 turns, 0 errors, one hedged turn bound to the second object for all three turns). A first verify run lost one session to a client network failure on gak-9 (`fetch failed` on `cdn-cgi/trace` too).
+
+Cold edge headers, `probe.ts --sessions=12` (48 three-turn sessions, 144 turns, 0 errors per client). The before columns are build-c511607 (version 656a90aa) in the same hour (gak-9: 67 cold turns of a `--sessions=24` run stopped after 201 turns, hosted Hand: 48).
+
+| client, provider | before p50/p99 ms, over 500 | after p50/p99 ms, over 500 |
+| --- | --- | --- |
+| gak-9, claude | 192/939, 2 of 34 | 199/709, 1 of 24 |
+| gak-9, codex | 173/635, 1 of 33 | 178/463, 0 of 24 |
+| hosted Hand, claude | 161/2,152, 2 of 24 | 147/1,327, 3 of 24 |
+| hosted Hand, codex | 147/262, 0 of 24 | 143/250, 0 of 24 |
+
+The hedge fired on 3 cold turns from gak-9 and 1 from the hosted Hand. The slowest turns after the change spent 585 to 632 ms in `session` time on the first object, before the admission commit returned, and the second object did not answer sooner (the slowest hosted Hand hedge still took 818 ms). Before the change, slow turns also showed a slow Worker to pool hop (edge 939 ms with `pool_object` 386 ms, and edge 611 ms with `pool_object` 97 ms). The tail is therefore not specific to one claimed object, and a second object does not remove it.
+
+The first admission commit stays on the cold first-text path: `log_commit_ms` on gak-9 was 62/111/533 ms (p50/p90/p99, n = 67) before and 59/92/630 ms (n = 48) after, against a cold client first delta of 1,376/3,148 and 1,277/2,622 ms. A provider request that starts before this commit can save about 60 ms at p50 and up to the commit tail at p99, but a session object holds its outgoing requests behind the output gate of the pending commit, so the request has to leave from somewhere other than the object (for example the Worker, with the object consuming its stream after the commit). That change was not built here.
+
+nanocode-ts df555ee reverts the hedge, and this commit pins build-c511607 again and removes `SESSION_POOL_HEDGE_MS`.
