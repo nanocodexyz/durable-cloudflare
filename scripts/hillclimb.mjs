@@ -151,11 +151,13 @@ const provider = async request => {
   const child = /Your agent ID is ([^\s.]+)\./.exec(first);
   if (child) {
     const id = child[1];
-    const entry = children.get(id) ?? { first: now, done: null, calls: 0 };
+    const entry = children.get(id) ?? { first: now, done: null, calls: 0, positions: new Set(), repeated: 0 };
     children.set(id, entry);
     if (!hedge) {
       provider_counts.child_calls++;
       entry.calls++;
+      if (entry.positions.has(messages.length)) entry.repeated++;
+      entry.positions.add(messages.length);
     }
     if (restartedAt !== null && !hedge) {
       provider_counts.child_after_restart++;
@@ -310,7 +312,7 @@ try {
   report.metrics = m;
   report.completed = final.completed.size;
   report.listed = final.all;
-  const repeats = [...children].filter(([id, entry]) => entry.calls > 2 && !inFlightAtKill.has(id)).length;
+  const repeats = [...children].filter(([id, entry]) => entry.repeated > 0 && !inFlightAtKill.has(id)).length;
   report.gate = {
     pass: final.completed.size === AGENTS && final.all === AGENTS && repeatedDone === 0 && repeats === 0 && (scenario === "score" || report.restarts.every(restart => restart.listed >= restart.spawned_before)) && (scenario !== "done" || provider_counts.child_after_restart === 0),
     lost: AGENTS - final.completed.size,
