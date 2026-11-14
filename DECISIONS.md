@@ -378,3 +378,20 @@ The probe after the deploy (`probe.ts --sessions=24`, 288 turns from each client
 | workers.dev, codex | 180/1,113 to 180/514 | 166/1,034 to 171/474 | 137/414 |
 
 The cold p99 is still above 500 ms. From the hosted Hand, 11 of 96 cold turns took more than 400 ms to edge headers, and 10 of those 11 had a `runtime_open_ms` of 300 to 630 ms, against none of the other 85. The object returns the response at admission and then opens the turn's runtime, and that work delays the delivery of the headers. Every claimed object in this run was less than 60 s old, and older objects opened in about 45 ms (gak-9). The next step is to make the prestart open a runtime for the turn, or to move the open after the headers are sent.
+
+## 2026-11-14: per-colo session pools measured and removed
+
+Commit 89f7565 bound `SESSION_SHARDS` (nanocode-ts build-d2294f1), so a binding miss claimed a ready session object from a `SessionShard` named by the request's `cf.colo`, and the object started near that colo. It was deployed as version a3ffe492 (2026-11-14 08:55 PST), and 16 three-turn sessions completed on both hosts and both providers.
+
+Warm claude-haiku-5-5 turns from gak-9, 96 sessions (48 per host, 288 turns, 0 errors), 08:58 to 09:18 PST, against the build-e1ed915 run (`hn/out/warm-all.jsonl`, 66 sessions). The values are p50/p90/p99 in ms:
+
+| host (colo) | build | admission (`session;dur`) | Worker to object round trip | provider first byte | server first delta |
+| --- | --- | --- | --- | --- | --- |
+| workers.dev (CMH) | e1ed915 | 14/22/24 | 47/59/72 | 654/855/1297 | 690/989/1891 |
+| workers.dev (CMH) | d2294f1 | 14/21/43 | 48/60/107 | 633/754/1383 | 670/790/1379 |
+| custom domain (SJC) | e1ed915 | 17/26/114 | 100/128/725 | 674/932/1207 | 761/1017/1305 |
+| custom domain (SJC) | d2294f1 | 88/227/409 | 35/82/326 | 732/950/1702 | 833/1235/1802 |
+
+An object near SJC cuts the round trip by 65 ms at p50. Its admission commit costs 71 ms more, and its model request reaches the provider 58 ms later, so the server first delta is 72 ms slower. From the hosted Hand, one session routes through SEA, IAD and EWR, and objects placed from SEA show an admission p50 of 72 to 78 ms. Native nanocode on gak-9 in the same window (52 TUI sessions, 104 warm turns) is 551/783/1543, so the Worker server first delta is +180/+211/+259 over native overall. The provider path (AI binding first byte 683 p50 against native 551 end to end) holds most of the gap, not object placement.
+
+This commit removes the `SESSION_SHARDS` binding and deletes the `SessionShard` class with migration v11. Bindings stay in the one `SessionPool` directory, so sessions bound to an object near SJC keep that object. New sessions start near the pool again.
