@@ -1,5 +1,6 @@
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { parseArgs } from "node:util";
@@ -153,6 +154,7 @@ const provider = async request => {
     const id = child[1];
     const entry = children.get(id) ?? { first: now, done: null, calls: 0, positions: new Set(), repeated: 0 };
     children.set(id, entry);
+    (entry.log ??= []).push([Math.round(now), createHash("sha1").update(body).digest("hex").slice(0, 10), messages.length, hedge ? 1 : 0, restartedAt === null ? 0 : report.restarts.length]);
     if (!hedge) {
       provider_counts.child_calls++;
       entry.calls++;
@@ -263,6 +265,7 @@ async function kill() {
   for (const id of listing.ids.filter(id => !killedDone.has(id))) inFlightAtKill.add(id);
   const spawnedBefore = listing.all;
   const m = await metrics().catch(() => null);
+  if (m) (report.pre_kill_metrics ??= []).push({ ...m, sql: undefined, checkpoints: undefined, log: undefined });
   if (m) carried = { requests: carried.requests + (m.requests ?? 0), child_requests: carried.child_requests + (m.child_requests ?? 0), rows_written: carried.rows_written + (m.sql?.rows_written ?? 0) };
   current = { requests: 0, child_requests: 0, rows_written: 0 };
   lastRequests = null;
@@ -334,6 +337,7 @@ try {
   report.children = children.size;
   report.child_active_ms = [...children.values()].reduce((total, entry) => total + ((entry.done ?? lastCall ?? entry.first) - entry.first + LATENCY), 0);
   report.peak_workerd_rss_mb = Math.round(peakRss / 1e6);
+  report.repeats_detail = [...children].filter(([, entry]) => entry.repeated > 0 || entry.calls > 2).map(([id, entry]) => ({ id, in_flight: inFlightAtKill.has(id), repeated: entry.repeated, done: entry.done === null ? null : Math.round(entry.done - started), calls: entry.log.map(([at, ...rest]) => [Math.round(at - started), ...rest]) }));
   report.poll_errors = pollErrors;
   report.store_bytes = diskBytes(persistence);
   await mf.dispose().catch(() => {});
