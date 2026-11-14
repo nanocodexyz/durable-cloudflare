@@ -464,3 +464,29 @@ nanocode-ts build-ddca280 (nanocode-ts ddca280) adds `SESSION_POOL_HEDGE_MS`. On
 Before the change, on build-c511607 (version 656a90aa), `probe.ts --sessions=24` from both clients at 19:25 UTC failed the gate again: cold edge headers 201/268/635 ms (p50/p90/p99, first 22 pooled cold turns, gak-9) and 172/863/2,152 ms (first 19, hosted Hand). One hosted Hand turn spent 728 ms and one 2,050 ms in admission before the commit, and the gak-9 tail had a 533 ms admission commit.
 
 `SESSION_POOL_HEDGE_MS` is 183, the p95 of `pool_object` (pool to session object headers, which include the admission commit) for pooled cold turns in the healthy build-c511607 window (`cold-p99/probe/out/cc-exp1.jsonl`, gak-9, 2026-11-14 18:25 UTC, n = 96: 113/139/183/291 ms p50/p90/p95/p99, admission commit 64/78/115/173 ms). A hedged turn returns its headers by about 183 ms plus the second object's `pool_object` (139 ms p90) plus the Worker share of edge time (100 ms p90), or about 420 ms, below the 500 ms gate.
+
+## 2026-11-14: warm TTFT against native, interleaved, same model and effort
+
+An interleaved run on gak-9 (Apple M1 Max, San Francisco, colo SJC) alternated one native nanocode TUI session (`bench/sla/run-mac.ts --live --lanes=live-nc-claude@native`, binary at nanocode 8467d6a, Claude login) and one deployed Worker session (`https://cloudflare.nanocode.xyz/`, Cloudflare version 656a90aa) per index, 3 turns each, with the same prompt shape, model and effort (claude-haiku-5-5 at medium, claude-sonnet-5-5 at high). The Worker TTFT is POST to the first `assistant.delta` at the client. The native TTFT is Enter to the first reply glyph rendered.
+
+| model | turn | native p50 / p99 | Worker p50 / p99 | Worker minus native p50 / p99 |
+| --- | --- | --- | --- | --- |
+| haiku-5-5 (20 sessions) | 1 | 892 / 1462 | 1359 / 3055 | +467 / +1593 |
+| haiku-5-5 (20 sessions) | 2 | 577 / 1466 | 834 / 1848 | +257 / +382 |
+| haiku-5-5 (20 sessions) | 3 | 653 / 1569 | 798 / 1562 | +145 / -7 |
+| haiku-5-5 (14 sessions, second window) | 2 | 566 / 2435 | 713 / 1228 | +147 / -1207 |
+| haiku-5-5 (14 sessions, second window) | 3 | 605 / 1572 | 765 / 2705 | +160 / +1133 |
+| sonnet-5-5 (20 sessions) | 1 | 1514 / 1666 | 1328 / 2859 | -186 / +1193 |
+| sonnet-5-5 (20 sessions) | 2 | 1443 / 1746 | 930 / 1185 | -513 / -561 |
+| sonnet-5-5 (20 sessions) | 3 | 1403 / 1655 | 902 / 1305 | -501 / -350 |
+
+Earlier warm comparisons pinned no model on the Worker probe and compared against a native run of the bench default (claude-haiku-4-5, no thinking), so they compared different models.
+
+Prompt cache: the Worker hits the cache on every warm turn (haiku turn 2: 12728 of 12779 input tokens read from cache, turn 1: 11779 of 12732 after the prime). Native exec turns read 15977 of 15981 and 16146 of 16148 from cache. No cache miss exists to fix.
+
+Per-hop warm breakdown (haiku, turns 2 and 3, p50): client to edge round trip 50 to 68 ms, Worker to session object 14 to 18 ms, session object arrival to provider dispatch 34 to 40 ms, provider first byte 529 to 611 ms, provider first byte to the first delta at the client 75 to 89 ms. Native time to its first output event in the same window (otel `messages.attempt` `time_to_first_output_ns`, 14 sessions) is 565 ms (turn 2) and 604 ms (turn 3) p50, against a Worker provider first byte of 529 and 550 ms. The provider is not slower from the session object. The Worker cost is the hops native does not have: the edge round trip, the dispatch wait and the delta relay.
+
+The dispatch wait is the storage commit. In 10 three-turn sessions, `started_ms` of the provider request equals `log_commit_ms` and `consumed_ms` on every warm turn (p50 39 ms, `admission_ms` 18 ms): the deferred pump starts when the first event chunk leaves the output gate, and the output gate opens only after the admission write commits. Runtime reuse already holds (`runtime_open_ms` 0 to 1, `runtime_reused` true), so a memory cache of the session saves no storage read on this path. Only a provider request sent before the admission write can remove the commit wait, which bounds that change at about 20 to 40 ms and needs the SDK to build the request before it persists the input.
+
+Haiku-5-5 misses the +50 ms target by about +150 to +250 ms p50. Sonnet-5-5 meets it with a margin of about 500 ms. The difference between the two models is in the provider time, not in the Worker hops, and the provider time depends on the credential path (API key on the Worker, Claude login on native).
+
