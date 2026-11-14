@@ -21,7 +21,8 @@
       { "name": "WALLETS", "class_name": "Wallet" },
       { "name": "PLANS", "class_name": "PlanVault" },
       { "name": "RELAY", "class_name": "RelayContainer" },
-      { "name": "SESSION_POOL", "class_name": "SessionPool" }
+      { "name": "SESSION_POOL", "class_name": "SessionPool" },
+      { "name": "SESSION_SHARDS", "class_name": "SessionShard" }
     ]
   },
   "migrations": [
@@ -33,7 +34,8 @@
     { "tag": "v6", "new_sqlite_classes": ["HandRelay"] },
     { "tag": "v7", "new_sqlite_classes": ["McpListings"] },
     { "tag": "v8", "new_sqlite_classes": ["PlanVault", "RelayContainer"] },
-    { "tag": "v9", "new_sqlite_classes": ["SessionPool"] }
+    { "tag": "v9", "new_sqlite_classes": ["SessionPool"] },
+    { "tag": "v10", "new_sqlite_classes": ["SessionShard"] }
   ],
   "vars": {
     "AI_GATEWAY_ID": "default",
