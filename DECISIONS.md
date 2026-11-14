@@ -383,7 +383,7 @@ The cold p99 is still above 500 ms. From the hosted Hand, 11 of 96 cold turns to
 
 Commit 89f7565 bound `SESSION_SHARDS` (nanocode-ts build-d2294f1), so a binding miss claimed a ready session object from a `SessionShard` named by the request's `cf.colo`, and the object started near that colo. It was deployed as version a3ffe492 (2026-11-14 08:55 PST), and 16 three-turn sessions completed on both hosts and both providers.
 
-Warm claude-haiku-5-5 turns from gak-9, 96 sessions (48 per host, 288 turns, 0 errors), 08:58 to 09:18 PST, against the build-e1ed915 run (`hn/out/warm-all.jsonl`, 66 sessions). The values are p50/p90/p99 in ms:
+Warm claude-haiku-5-5 turns from gak-9, 96 sessions (48 per host, 288 turns, 0 errors), 08:58 to 09:10 PST, against the build-e1ed915 run (`hn/out/warm-all.jsonl`, 66 sessions). The values are p50/p90/p99 in ms:
 
 | host (colo) | build | admission (`session;dur`) | Worker to object round trip | provider first byte | server first delta |
 | --- | --- | --- | --- | --- | --- |
@@ -395,3 +395,5 @@ Warm claude-haiku-5-5 turns from gak-9, 96 sessions (48 per host, 288 turns, 0 e
 An object near SJC cuts the round trip by 65 ms at p50. Its admission commit costs 71 ms more, and its model request reaches the provider 58 ms later, so the server first delta is 72 ms slower. From the hosted Hand, one session routes through SEA, IAD and EWR, and objects placed from SEA show an admission p50 of 72 to 78 ms. Native nanocode on gak-9 in the same window (52 TUI sessions, 104 warm turns) is 551/783/1543, so the Worker server first delta is +180/+211/+259 over native overall. The provider path (AI binding first byte 683 p50 against native 551 end to end) holds most of the gap, not object placement.
 
 This commit removes the `SESSION_SHARDS` binding and deletes the `SessionShard` class with migration v11. Bindings stay in the one `SessionPool` directory, so sessions bound to an object near SJC keep that object. New sessions start near the pool again.
+
+The hosted Hand ran the same probe from 08:59 to 09:13 PST (76 sessions, 228 turns before the rollback, 0 errors). Its warm server first delta is 884/1325/2199 ms, against native nanocode from the hosted Hand at 720/1140/1407 (26 sessions, 52 warm turns, 09:17 to 09:24 PST): +164/+185/+792. The rollback, 2b1ba6f, was deployed as version b721d285 at 09:14 PST. 16 three-turn sessions completed on both hosts and both providers (48 turns, 0 errors). SJC admission is 17/32 ms (p50/p90) again, and the SJC round trip is 98 ms.
