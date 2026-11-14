@@ -78,7 +78,7 @@ function score(runs) {
 const scenario = values.scenario;
 const AGENTS = Number(values.agents);
 const BATCH = Number(values.batch);
-const provider_counts = { accepted: 0, rejected: 0, root_calls: 0, root_bytes: 0, child_calls: 0, after_restart: 0, child_after_restart: 0 };
+const provider_counts = { accepted: 0, rejected: 0, hedges: 0, root_calls: 0, root_bytes: 0, child_calls: 0, after_restart: 0, child_after_restart: 0 };
 const children = new Map();
 const wrapped = new Map();
 let firstCall = null, lastCall = null, restartedAt = null, firstAfterRestart = null, doneCalls = 0;
@@ -133,7 +133,9 @@ const provider = async request => {
   }
   if (LATENCY > 0) await sleep(LATENCY);
   const input = JSON.parse(body);
+  const hedge = request.headers.get("x-nanocode-hedge") !== null;
   provider_counts.accepted++;
+  if (hedge) provider_counts.hedges++;
   const now = performance.now();
   firstCall ??= now;
   lastCall = now;
@@ -149,23 +151,25 @@ const provider = async request => {
   const child = /Your agent ID is ([^\s.]+)\./.exec(first);
   if (child) {
     const id = child[1];
-    provider_counts.child_calls++;
     const entry = children.get(id) ?? { first: now, done: null, calls: 0 };
     children.set(id, entry);
-    entry.calls++;
-    if (restartedAt !== null) {
+    if (!hedge) {
+      provider_counts.child_calls++;
+      entry.calls++;
+    }
+    if (restartedAt !== null && !hedge) {
       provider_counts.child_after_restart++;
       if (killedDone.has(id)) repeatedDone++;
     }
     if (running) return use(input, "wait", { cell_id: running[1], yield_time_ms: 30000 });
     if (answered.length) {
-      if ((uses.get(answered[0].tool_use_id) ?? "").endsWith("submit_result") || answeredText.includes("accepted")) { entry.done ??= now; doneCalls++; }
+      if ((uses.get(answered[0].tool_use_id) ?? "").endsWith("submit_result") || answeredText.includes("accepted")) { entry.done ??= now; if (!hedge) doneCalls++; }
       return reply(input, "done");
     }
     const name = (input.tools ?? []).map(entry => entry.name).find(name => name === "submit_result" || name?.endsWith("__submit_result")) ?? "submit_result";
     return invoke(input, name, { output: "ok" });
   }
-  provider_counts.root_calls++;
+  if (!hedge) provider_counts.root_calls++;
   provider_counts.root_bytes += body.length;
   if (running) return use(input, "wait", { cell_id: running[1], yield_time_ms: 30000 });
   const prompt = trailing.map(message => text(message.content)).filter(Boolean).join("\n");

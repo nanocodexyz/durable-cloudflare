@@ -509,3 +509,18 @@ The hedge fired on 3 cold turns from gak-9 and 1 from the hosted Hand. The slowe
 The first admission commit stays on the cold first-text path: `log_commit_ms` on gak-9 was 62/111/533 ms (p50/p90/p99, n = 67) before and 59/92/630 ms (n = 48) after, against a cold client first delta of 1,376/3,148 and 1,277/2,622 ms. A provider request that starts before this commit can save about 60 ms at p50 and up to the commit tail at p99, but a session object holds its outgoing requests behind the output gate of the pending commit, so the request has to leave from somewhere other than the object (for example the Worker, with the object consuming its stream after the commit). That change was not built here.
 
 nanocode-ts df555ee reverts the hedge, and this commit pins build-c511607 again and removes `SESSION_POOL_HEDGE_MS`.
+
+## 2026-11-14: the hill-climb mock counts hedged model requests apart from model calls
+
+`scripts/hillclimb.mjs` counts a request that carries `x-nanocode-hedge` in `provider.hedges` and leaves it out of `root_calls`, `child_calls`, a child's call count and `doneCalls`. A hedge is the second attempt of one logical call (nanocode d23a902c6 sends the marker on it), so it no longer reads as a repeated child turn. The hedge still takes a token from the mock's rate limit, because a provider counts it too.
+
+nanocode d23a902c6 also removes the cause of the extra calls in this gate: a request that waited in the Claude client's admission behind a retry-after started its hedge timer while queued, and the hedge queued in the same admission, so both reached the mock about 36 ms apart. The hedge timer now starts after admission, and a hedge is sent only when an admission slot is free.
+
+Measured on the hosted Hand with `node scripts/hillclimb.mjs --scenario <s> --agents 2000 --rate 200`:
+
+| Build | score child calls | score repeats | gate scenarios |
+| --- | --- | --- | --- |
+| nanocode-ts build-ddca280 (nanocode a5d401e0c) | 4,001 | 1 | score failed |
+| nanocode-ts ddca280 rebuilt against nanocode d23a902c6 (`npm run build`, clang-22) | 4,000 | 0 | score, spawn, turn, done, twice passed: 0 lost, 0 repeated, 0 hedges |
+
+The fixed SDK reaches the deployed Worker only after a nanocode-ts release that pins nanocode d23a902c6 or later.
