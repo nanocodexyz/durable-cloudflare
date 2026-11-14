@@ -126,7 +126,7 @@ const nanocode = App.create<Env>({
   retainedTurns: 8,
   tools: charge,
   chaos: true,
-  workspace: { python: (authority, env) => async request => await env.PYTHON.get(env.PYTHON.idFromName(authority.account_id)).run(request) as unknown as Shell.Reply, psh: pshModule, pythonModule, pythonCpuMs: 5_000 },
+  workspace: { python: (authority, env) => async request => await env.PYTHON.get(env.PYTHON.idFromName(authority.account_id)).run(request) as unknown as Shell.Reply, psh: pshModule, pythonModule },
   ...wallets.nanocode,
   ...(wallets.nanocode.mcp ? { mcp: { ...wallets.nanocode.mcp, store: env => ({ get: key => env.MCP_LISTINGS_KV.get(key, { cacheTtl: Number(env.MCP_LISTING_CACHE_TTL_S) }), put: (key, value, ttlMs) => env.MCP_LISTINGS_KV.put(key, value, { expirationTtl: Math.max(60, Math.ceil(ttlMs / 1000)) }) }) } } : {}),
 });
