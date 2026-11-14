@@ -15,6 +15,7 @@ const { values } = parseArgs({ options: {
   scenarios: { type: "string", default: "score,spawn,turn,done,twice" },
   "gate-agents": { type: "string" },
   limit: { type: "string", default: "3600" },
+  page: { type: "string" },
 } });
 
 const RATE = Number(values.rate);
@@ -29,7 +30,7 @@ if (!values.scenario) {
     const agents = scenario === "score" ? values.agents : values["gate-agents"] ?? values.agents;
     const out = "output/hillclimb/" + values.label + "-" + scenario + ".json";
     const started = performance.now();
-    const child = spawnSync(process.execPath, [process.argv[1], "--scenario", scenario, "--agents", agents, "--batch", values.batch, "--rate", values.rate, "--latency", values.latency, "--label", values.label, "--limit", values.limit], { stdio: ["ignore", "ignore", "inherit"], env: { ...process.env, HILLCLIMB_OUT: out } });
+    const child = spawnSync(process.execPath, [process.argv[1], "--scenario", scenario, "--agents", agents, "--batch", values.batch, "--rate", values.rate, "--latency", values.latency, "--label", values.label, "--limit", values.limit, ...(values.page ? ["--page", values.page] : [])], { stdio: ["ignore", "ignore", "inherit"], env: { ...process.env, HILLCLIMB_OUT: out } });
     runs[scenario] = (() => { try { return JSON.parse(readFileSync(out, "utf8")); } catch { return { failure: "scenario exited " + child.status + " without a report" }; } })();
     console.error(scenario + " finished in " + ((performance.now() - started) / 1000).toFixed(0) + " s");
   }
@@ -65,6 +66,7 @@ function score(runs) {
     restart_ready_ms: restart?.ready_ms ?? null,
     restart_first_call_ms: restart?.first_call_ms ?? null,
     restart_list_ms: restart?.list_ms ?? null,
+    restart_list_first_ms: restart?.list_first_ms ?? null,
     root_bytes_per_child: n ? Math.round((run.provider?.root_bytes ?? 0) / n) : null,
     root_calls: run.provider?.root_calls ?? null,
     cloudflare_usd_estimate: Number(cloudflare.toFixed(5)),
@@ -220,8 +222,16 @@ const base = "http://worker/sessions/" + values.label + "-" + scenario + "-" + D
 const headers = { authorization: "Bearer local-measurement", "content-type": "application/json" };
 const request = async (url, init = {}) => mf.dispatchFetch(url, { ...init, headers });
 const metrics = async () => (await request(base + "/metrics")).json();
-const completedIds = async () => {
-  const listing = await (await request(base + "/subagents")).json();
+const completedIds = async (first = () => {}) => {
+  const listing = { agents: [] };
+  for (let after = null; ;) {
+    const page = await (await request(base + "/subagents" + (values.page ? "?limit=" + values.page + (after === null ? "" : "&after=" + after) : ""))).json();
+    first();
+    first = () => {};
+    listing.agents.push(...(page.agents ?? []));
+    after = page.next_after_agent_id ?? null;
+    if (after === null) break;
+  }
   return { all: (listing.agents ?? []).length, ids: (listing.agents ?? []).map(agent => String(agent.agent_id)), completed: new Set((listing.agents ?? []).filter(agent => agent.status?.state === "completed").map(agent => String(agent.agent_id))) };
 };
 let pollErrors = 0;
@@ -273,8 +283,9 @@ async function kill() {
   await mf.ready;
   const ready = performance.now() - restartedAt;
   const listStart = performance.now();
-  const after = await completedIds();
-  const restart = { ready_ms: Math.round(ready), list_ms: Math.round(performance.now() - listStart), listed: after.all, spawned_before: spawnedBefore, done_before: killedDone.size, in_flight_before: inFlightAtKill.size };
+  let listFirst = null;
+  const after = await completedIds(() => { listFirst = performance.now() - listStart; });
+  const restart = { ready_ms: Math.round(ready), list_first_ms: Math.round(listFirst), list_ms: Math.round(performance.now() - listStart), listed: after.all, spawned_before: spawnedBefore, done_before: killedDone.size, in_flight_before: inFlightAtKill.size };
   report.restarts.push(restart);
   return restart;
 }
