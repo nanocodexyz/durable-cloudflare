@@ -576,3 +576,16 @@ nanocode-ts build-3c7077e (this repository 8e39e29, version 9b2b7d2d, deployed f
 | hosted Hand, codex | 176/268, 0 of 24 | 0/0, 0 of 24 | 1,843/3,189 / 1,843/3,631 |
 
 The gate passes on both clients. The first delta is unchanged within the run to run spread, because the admission commit still precedes the first model request on a cold turn. Client side header time (`headers` in the probe, client to edge network included) was 87/1,223 ms from gak-9 and 461/1,678 ms from the hosted Hand after the change, against 272/724 and 522/2,255 ms before.
+
+## 2026-11-14: the warm turn's provider request leaves before the admission alarm commit
+
+nanocode-ts 581ed28 starts a warm streamed turn's provider request before the session object writes the admission alarm, so the Durable Object output gate no longer holds that fetch for the commit. The change shipped in build-3c7077e (deployed as version 9b2b7d2d at 20:48 UTC). build-9455291, released for this change alone, was not deployed. Measured from gak-9 (Apple M1 Max, SJC) with `~/nc-release/gk2/inter3.sh` (`inter.sh` with `wprobe2.mjs`), claude-haiku-5-5, 20 interleaved native and Worker sessions of 3 turns each per run, 0 errors in each run.
+
+| run | turn | native p50 / p99 | Worker p50 / p99 | Worker minus native p50 | provider start after admission p50 |
+| --- | --- | --- | --- | --- | --- |
+| before, f334eff9 (20:29 UTC) | 2 | 569 / 1615 | 783 / 1366 | +214 | 36 |
+| before | 3 | 582 / 1110 | 829 / 1478 | +247 | 33 |
+| after, 9b2b7d2d (20:54 UTC) | 2 | 612 / 1577 | 820 / 2401 | +208 | 36 |
+| after | 3 | 574 / 1273 | 797 / 1577 | +223 | 13 |
+
+Turn 3 dispatches 20 ms sooner, and its Worker minus native gap falls by 24 ms at p50. Turn 2 does not change: its `runtime_open_ms` of 15 to 31 ms is the pump's `storage.sync` waiting for a write made at that turn's admission, so its fetch still follows a commit. Provider first byte is unchanged (592 ms before and 596 ms after, warm p50). The haiku warm gap stays above +200 ms, against a gate of +50 ms. Most of the remaining gap is the client to edge to session object path (client to edge round trip 49 ms p50 after this deploy) and the relay of the first delta back from the object. Only object placement near the client or a provider request sent from the edge shortens that path. The scratch Worker `gk2-pool-probe` was deleted from the demo account.
