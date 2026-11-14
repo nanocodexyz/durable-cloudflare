@@ -434,3 +434,24 @@ The p50 values differ by 8 ms, and which path wins flips between objects and tim
 Connections are already reused: an unauthenticated GET to api.anthropic.com/v1/models from the object took 51/90/105 ms (n=248) and a second GET right after it 50/90/108 ms, and api.openai.com took 73/177/255 then 66/94/253 (n=89). Each fetch costs about one round trip (29 to 41 ms from eastern objects, 57 to 87 ms from western ones), so DNS and TLS do not show in the first byte, and the remaining 500+ ms is the provider's own time to first token. Smart Placement places a Worker's fetch handler, not Durable Objects, and model requests leave from the session object, so it does not move the provider call. Eastern and western objects reached the same provider first byte within noise (enam 563 to 618 against wnam 497 to 612 p50 by path), which matches the per-colo shard result that placement near the user does not shorten provider calls.
 
 The demo on build-02309cc, measured from gak-9 the same hour (24 three-turn sessions per provider on both hosts, 288 turns, 0 errors), against native nanocode's rp1 run (turns 2 and 3, n=104, 551/783/1543): Claude warm server first delta is 661/1143/1829 on nanocode-cloudflare-durable.tempo-dev.workers.dev and 769/1230/1916 on cloudflare.nanocode.xyz, or +110/+360/+286 and +218/+447/+373 against native; client first delta is 804/1225/2022 and 801/1277/1956, or +253/+442/+479 and +250/+494/+413. The object's own model first byte was 616/1085 and 650/950/1858 with the full Claude Code request, about 40 to 75 ms above the probe's short request, and pre-dispatch took 50 to 52 ms p50.
+
+## 2026-11-14: a committed write at each pooled prestart removes the cold admission commit tail
+
+nanocode-ts build-c511607 (durable-cloudflare 46fa7fc, version e6e062e5) writes the `prestarted` metadata row at each prestart and pool keepalive, and the prestart returns after `storage.sync` resolves. The prestart commit takes 12 to 16 ms p50 (`object_prestart_commit`). After the deploy, 16 of 16 three-turn sessions completed from gak-9 on both hosts and providers (48 turns, 0 errors).
+
+Cold turns (`probe.ts --sessions=24`, 288 turns from each client, 0 errors, n = 24 per cell), edge headers p50/p90/p99 ms, against build-02309cc from gak-9 (the previous entry):
+
+| Cell | build-02309cc, gak-9 | build-c511607, gak-9 | build-c511607, hosted Hand |
+| --- | --- | --- | --- |
+| workers.dev, claude | 137/208/939 | 134/152/158 | 163/211/338 |
+| workers.dev, codex | 141/476/507 | 144/191/284 | 170/232/452 |
+| custom domain, claude | 216/441/778 | 203/246/384 | 143/260/396 |
+| custom domain, codex | 208/264/321 | 207/226/278 | 188/228/360 |
+| all cold turns | 193/321/939, 4 over 500 | 176/220/384, 0 over 500 | 169/228/452, 0 over 500 |
+
+The first admission commit of a claimed pooled object (`log_commit_ms`, equal to `alarm_commit_ms` and `consumed_ms`) fell from 64/133/876 ms to 64/78/173 ms (n = 96, gak-9) and 65/88/229 ms (n = 96, hosted Hand). Warm turns commit in 37/47/183 and 37/48/91 ms. The cold edge header p99 is below the 500 ms gate from both clients.
+
+- Experiment 2, nanocode-ts build-024956e (2ec7b78, version 1031a1e6), also set the alarm of an unbound object at each prestart, so the claim changes a pending alarm instead of creating one. It made the tail worse: 5 of 86 cold turns over 500 ms from gak-9 (commit 60/136/4,888 ms, edge p99 5,012 ms) and 1 of 60 from the hosted Hand (commit 55/123/399 ms). log and alarm commits resolve in the same commit in every turn, so the alarm write is not a separate cost. nanocode-ts 324c983 reverts it, and this commit pins build-c511607 again.
+- Experiment 3 needs no change: the prestart opens the runtime of the owner scope (`instance(ownerScope)`), which creates the turn log schema, and the first prestart commit makes it durable before a claim.
+- The remaining slow cold turns (300 to 450 ms) have a 50 to 230 ms admission commit and a slow Worker to object round trip (`pool_object`).
+
