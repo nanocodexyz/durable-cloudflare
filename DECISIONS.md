@@ -549,3 +549,30 @@ The 75 to 89 ms relay is the one-way path from the session object to the client.
 ## 2026-11-14: the crash gate counts a repeat by conversation position
 
 `scripts/hillclimb.mjs` counted a child as repeated outside its in-flight window when it made more than two model calls (2026-11-14, Georgios: the memory lane's double-kill repeat, bug 3). A child whose `submit_result` cell outlives its yield (10 s by default) answers "Script running with cell ID", the mock answers with `wait`, and the child makes three calls with no replay. Under CPU contention from other runs this happened at random, on master and with the turn-log patches alike: 2K `twice` on master b605ff2bf failed with 2, and both 10K `turn` runs (master and master plus the three turn-log patches) failed with 2 each, while `lost` and `repeated_after_done` stayed 0. Every child is listed at each kill, so a counted child was completed at the first kill and any call after a restart counts as `repeated_after_done` instead: the counted calls all came before any restart. A repeat is now a call at a conversation position (`messages.length`) the child already called at, since a replayed call keeps its position and a `wait` round trip extends the conversation. Reproducer: the same bundle with `cellYieldMs: 1` (every child takes the `wait` round trip), 2K `twice`, `--batch 100 --rate 200`: the old count reports 451 children outside the in-flight window, all with a `wait` round trip; the position count reports 0, with 0 lost, 0 repeated after done and the gate passing.
+
+## 2026-11-14: turn stream headers before admission close the cold header gate
+
+The cold POST to headers tail is the output gate of the claimed session object, which holds the response until the first admission commit. nanocode-ts build-77286b6 (this repository f2a4cd5, version f334eff9) adds per-hop server-timing, and `probe.ts --sessions=12` (24 three-turn sessions per provider, 0 errors per client, 20:28 UTC) split the pooled cold turns:
+
+| component (p50/p90/p99 ms) | gak-9 | hosted Hand |
+| --- | --- | --- |
+| edge headers (`worker`) | 175/240/529 | 189/240/514 |
+| Worker to pool (`pool_in`) | 26/44/51 | 41/50/51 |
+| pool binding commit (`pool_commit`) | 18/20/22 | 18/20/23 |
+| pool to object (`object_in`) | 28/37/46 | 29/34/39 |
+| object admission (`session`) | 16/27/44 | 15/42/66 |
+| object output gate (`object_out`) | 74/100/459 | 77/100/383 |
+| pool to Worker (`pool_out`) | 10/51/66 | 34/38/40 |
+
+The slow turns (529 and 514 ms) spent 459 and 383 ms in `object_out`, and `log_commit_ms` of the first was 464 ms. Admission itself is the subscription lookup (`object_subscribe`), and the runtime instance and submit steps take 0 ms, so a claim path without wasm work or a pool binding off the response path cannot move the tail.
+
+nanocode-ts build-3c7077e (this repository 8e39e29, version 9b2b7d2d, deployed from gak-9 with the deploy lock, SDK pin nanocode eb678f3) returns the stream headers of a streaming turn POST from the Worker and relays the session object stream after them. A refused admission arrives as an `event: error` frame with its status and body. 16 of 16 three-turn sessions completed on both hosts and both providers (`probe.ts --sessions=4`, 48 turns, 0 errors, every turn `session_route` relayed), and a turn with an empty prompt returned 200 headers and `event: error` with status 400.
+
+| client, provider | before p50/p99 ms, over 500 | after p50/p99 ms, over 500 | cold first delta before / after p50/p99 ms |
+| --- | --- | --- | --- |
+| gak-9, claude | 169/298, 0 of 24 | 0/0, 0 of 24 | 969/2,192 / 951/2,102 |
+| gak-9, codex | 178/529, 1 of 24 | 0/0, 0 of 24 | 1,340/2,109 / 1,223/2,355 |
+| hosted Hand, claude | 194/514, 1 of 24 | 0/0, 0 of 24 | 1,062/1,874 / 1,133/2,765 |
+| hosted Hand, codex | 176/268, 0 of 24 | 0/0, 0 of 24 | 1,843/3,189 / 1,843/3,631 |
+
+The gate passes on both clients. The first delta is unchanged within the run to run spread, because the admission commit still precedes the first model request on a cold turn. Client side header time (`headers` in the probe, client to edge network included) was 87/1,223 ms from gak-9 and 461/1,678 ms from the hosted Hand after the change, against 272/724 and 522/2,255 ms before.
