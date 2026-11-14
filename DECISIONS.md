@@ -397,3 +397,24 @@ An object near SJC cuts the round trip by 65 ms at p50. Its admission commit cos
 This commit removes the `SESSION_SHARDS` binding and deletes the `SessionShard` class with migration v11. Bindings stay in the one `SessionPool` directory, so sessions bound to an object near SJC keep that object. New sessions start near the pool again.
 
 The hosted Hand ran the same probe from 08:59 to 09:13 PST (76 sessions, 228 turns before the rollback, 0 errors). Its warm server first delta is 884/1325/2199 ms, against native nanocode from the hosted Hand at 720/1140/1407 (26 sessions, 52 warm turns, 09:17 to 09:24 PST): +164/+185/+792. The rollback, 2b1ba6f, was deployed as version b721d285 at 09:14 PST. 16 three-turn sessions completed on both hosts and both providers (48 turns, 0 errors). SJC admission is 17/32 ms (p50/p90) again, and the SJC round trip is 98 ms.
+
+## 2026-11-14: cold turns wait for the first storage commit of a pooled session object
+
+nanocode-ts build-ee39952 (durable-cloudflare df061ae, version 06d5973d) starts the pump of an accepted streamed turn after the response gives its first event chunk to the reader, so the runtime open no longer runs before the response leaves the session object. build-02309cc (d875a7a, version 182ec0fe) adds `log_commit_ms` and `alarm_commit_ms` to the turn timings. After each deploy, 16 of 16 three-turn sessions completed from gak-9 on both hosts and providers (48 turns, 0 errors).
+
+Cold turns (`probe.ts --sessions=24`, n = 24 per cell except where noted), edge headers p50/p99 ms:
+
+| Cell | build-e1ed915, hosted Hand | build-ee39952, hosted Hand | build-ee39952, gak-9 | build-02309cc, gak-9 (n = 23) |
+| --- | --- | --- | --- | --- |
+| custom domain, claude | 153/819 | 168/313 | 199/297 | 216/778 |
+| custom domain, codex | 148/449 | 161/1,604 | 208/882 | 208/321 |
+| workers.dev, claude | 160/1,338 | 157/699 | 144/664 | 139/939 |
+| workers.dev, codex | 180/514 | 167/941 | 124/204 | 141/507 |
+| all cold turns | 163/1,338, 7 over 500 | 166/1,604, 6 over 500 | 181/882, 4 over 500 | 193/939, 4 over 500 |
+
+Client first delta for all cold turns, p50/p99: 1,899/3,839 before and 1,741/3,695 after from the hosted Hand, 1,400/3,629 before and 1,321/3,273 after from gak-9.
+
+- `runtime_open_ms` of cold turns fell from 41 to 50 ms p50 (300 to 630 ms in the slow turns) to 0 to 1 ms, because the open now runs after the admission commit. The edge header p99 did not move below the 500 ms gate.
+- In the slow turns, `consumed_ms` (admission to the first chunk read) equals `log_commit_ms` and `alarm_commit_ms`: the response waits on the output gate for the first commit of the turn admission (turn log, session metadata and the recovery alarm in one commit). That commit takes 64/130/876 ms (p50/p90/p99, n = 92, gak-9) and 64/293/809 ms (n = 65, hosted Hand) on a claimed pooled object, against 35 to 39/47 to 50/111 to 116 ms on warm turns of the same sessions. The slow commits do not correlate with object age or the time since the last prestart (both 3 to 46 s).
+- The other slow cold turns have a fast commit and a slow Worker to object round trip, or a slow admission before the commit (one turn of 827 ms).
+- The output gate cannot release the response before the admission commit without showing a client a turn that a storage failure can lose, so the remaining cold tail is the storage commit tail of a newly claimed object. The next experiment is a committed write at each prestart keepalive, to find whether a recent commit on the object shortens the first claim commit.
