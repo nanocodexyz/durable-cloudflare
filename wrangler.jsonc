@@ -24,18 +24,7 @@
     ]
   },
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["AgentSession"] },
-    { "tag": "v2", "new_sqlite_classes": ["PublicLimit"] },
-    { "tag": "v3", "new_sqlite_classes": ["HandRelay"] },
-    { "tag": "v4", "new_sqlite_classes": ["Wallet"] },
-    { "tag": "v5", "new_sqlite_classes": ["Python"], "deleted_classes": ["HandRelay"] },
-    { "tag": "v6", "new_sqlite_classes": ["HandRelay"] },
-    { "tag": "v7", "new_sqlite_classes": ["McpListings"] },
-    { "tag": "v8", "new_sqlite_classes": ["PlanVault", "RelayContainer"] },
-    { "tag": "v9", "new_sqlite_classes": ["SessionPool"] },
-    { "tag": "v10", "new_sqlite_classes": ["SessionShard"] },
-    { "tag": "v11", "deleted_classes": ["SessionShard"] },
-    { "tag": "v12", "deleted_classes": ["Python"] }
+    { "tag": "v12", "new_sqlite_classes": ["AgentSession", "PublicLimit", "HandRelay", "Wallet", "McpListings", "PlanVault", "RelayContainer", "SessionPool"] }
   ],
   "vars": {
     "AI_GATEWAY_ID": "default",
